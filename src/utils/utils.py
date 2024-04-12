@@ -388,7 +388,9 @@ def partition_data(dataset, datadir, logdir, partition, n_parties, beta=0.4, loc
             np.random.shuffle(idx_batch[j])
             net_dataidx_map[j] = idx_batch[j]
 
+    # 根据每组客户端拥有的label数量来划分
     elif partition > "noniid-#label0" and partition <= "noniid-#label9":
+        client_cluster_init = np.ndarray(0, dtype=np.int64)
         num = eval(partition[13:])
         if dataset in ('celeba', 'covtype', 'a9a', 'rcv1', 'SUSY'):
             num = 1
@@ -399,40 +401,40 @@ def partition_data(dataset, datadir, logdir, partition, n_parties, beta=0.4, loc
             K = 200
         else:
             K = 10
-            
-        print(f'K: {K}')
-        if num == 10:
-            net_dataidx_map ={i:np.ndarray(0,dtype=np.int64) for i in range(n_parties)}
-            for i in range(10):
-                idx_k = np.where(y_train==i)[0]
+
+        print(f'K: {K}')  # 打印总的标签数量
+
+        # 生成标签组合
+        label_combinations = generate_label_combinations(K, num)
+
+        # 生成一个字典，用于存储每个客户端的数据索引
+        net_dataidx_map = {i: np.ndarray(0, dtype=np.int64) for i in range(n_parties)}
+
+        # 划分的组数
+        group = len(label_combinations)
+
+        # 每组的客户端数量
+        clients_per_group = n_parties//group
+
+        # 为每组客户端分配数据索引
+        for i, combo in enumerate(label_combinations):
+            # 计算当前组的客户端索引范围
+            start_idx = i * clients_per_group
+            end_idx = start_idx + clients_per_group
+
+            # 收集组合中所有标签的数据索引
+            combined_idx = np.array([], dtype=np.int64)
+            for label in combo:
+                idx_k = np.where(y_train == label)[0]
                 np.random.shuffle(idx_k)
-                split = np.array_split(idx_k,n_parties)
-                for j in range(n_parties):
-                    net_dataidx_map[j]=np.append(net_dataidx_map[j],split[j])
-        else:
-            times=[0 for i in range(K)]
-            contain=[]
-            for i in range(n_parties):
-                current=[i%K]
-                times[i%K]+=1
-                j=1
-                while (j<num):
-                    ind=random.randint(0,K-1)
-                    if (ind not in current):
-                        j=j+1
-                        current.append(ind)
-                        times[ind]+=1
-                contain.append(current)
-            net_dataidx_map ={i:np.ndarray(0,dtype=np.int64) for i in range(n_parties)}
-            for i in range(K):
-                idx_k = np.where(y_train==i)[0]
-                np.random.shuffle(idx_k)
-                split = np.array_split(idx_k,times[i])
-                ids=0
-                for j in range(n_parties):
-                    if i in contain[j]:
-                        net_dataidx_map[j]=np.append(net_dataidx_map[j],split[ids])
-                        ids+=1
+                combined_idx = np.concatenate([combined_idx, idx_k])
+            np.random.shuffle(combined_idx)
+            # 将这个组合的数据索引分配同组到客户端
+            split = np.array_split(combined_idx, clients_per_group)
+            # 将索引分配给当前组的所有客户端
+            for j in range(start_idx, end_idx):
+                net_dataidx_map[j] = np.append(net_dataidx_map[j], split[j-start_idx])
+                client_cluster_init = np.append(client_cluster_init, i)
     elif partition > "noniid1-#label0" and partition <= "noniid1-#label9":
         print('Modified Non-IID partitioning')
         num = eval(partition[14:])
@@ -550,7 +552,16 @@ def partition_data(dataset, datadir, logdir, partition, n_parties, beta=0.4, loc
         net_dataidx_map_test = None 
         testdata_cls_counts = None 
 
-    return (X_train, y_train, X_test, y_test, net_dataidx_map, net_dataidx_map_test, traindata_cls_counts, testdata_cls_counts)
+    return (X_train, y_train, X_test, y_test, net_dataidx_map, net_dataidx_map_test, traindata_cls_counts, testdata_cls_counts, client_cluster_init)
+
+def generate_label_combinations(K, num):
+    # 生成包含所有标签的数组
+    labels = np.arange(K)
+    # 随机打乱标签数组
+    np.random.shuffle(labels)
+    # 按照固定的组大小进行分割
+    label_combinations = [labels[i:i+num] for i in range(0, K, num)]
+    return label_combinations
 
 def compute_accuracy(model, dataloader, get_confusion_matrix=False, device="cpu"):
 
